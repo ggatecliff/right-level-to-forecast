@@ -522,7 +522,15 @@ function ConfigScreen({ rows, fileName, signalFiles, onRun, onBack }) {
     return numeric.find(c => /qty|quant|demand|sales|volume|amount/i.test(c)) || numeric[0] || cols[0];
   }
   function detectGrains() {
-    return cols.filter(c => { const vals = new Set(rows.slice(0, 200).map(r => r[c])); return vals.size >= 2 && vals.size <= 200 && !/date|time|week|period|qty|quant|demand|sales|cost|price|amount/i.test(c); });
+    return cols.filter(c => {
+      const vals = new Set(rows.slice(0, 200).map(r => r[c]));
+      if (vals.size < 2 || vals.size > 200) return false;
+      if (/date|time|week|period|qty|quant|demand|sales|cost|price|amount|ship|unit|vol|revenue|count/i.test(c)) return false;
+      // Exclude columns where most sampled values are numeric — those are metrics, not dimensions
+      const sample = rows.slice(0, 20).map(r => parseCurrency(r[c]));
+      if (sample.filter(v => v != null).length >= 10) return false;
+      return true;
+    });
   }
   function detectFilterCol() {
     return cols.find(c => { const vals = new Set(rows.map(r => r[c])); return vals.size <= 10 && /header|category|type|class|flag|kind/i.test(c); }) || "";
