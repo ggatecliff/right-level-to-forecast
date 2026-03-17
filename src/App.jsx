@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import {
@@ -94,9 +94,9 @@ function parseCurrency(v) {
 }
 function parseDate(v) {
   if (!v) return null;
-  if (v instanceof Date) return v.toISOString();
+  if (v instanceof Date) return isNaN(v) ? null : v.toISOString();
   const d = new Date(v); if (!isNaN(d)) return d.toISOString();
-  return String(v);
+  return null;
 }
 
 // ─────────────────────────────────────────────
@@ -360,13 +360,15 @@ function UploadScreen({ onData }) {
   const [error, setError] = useState(null);
   const [signalFiles, setSignalFiles] = useState([]); // [{rows, name}]
   const [sigDragging, setSigDragging] = useState(false);
+  const [signalError, setSignalError] = useState(null);
 
   function handleDemandFile(file) {
     setError(null);
     parseFile(file, rows => onData(rows, file.name, signalFiles), e => setError(e));
   }
   function handleSignalFile(file) {
-    parseFile(file, rows => setSignalFiles(prev => [...prev, { rows, name: file.name }]), () => {});
+    setSignalError(null);
+    parseFile(file, rows => setSignalFiles(prev => [...prev, { rows, name: file.name }]), e => setSignalError(`Could not read "${file.name}": ${e}`));
   }
   function removeSignal(i) { setSignalFiles(prev => prev.filter((_, idx) => idx !== i)); }
 
@@ -407,7 +409,7 @@ function UploadScreen({ onData }) {
         <div style={{ marginBottom: 24 }}>
           <div style={{ ...lbS, marginBottom: 8 }}>2. Signal Files <span style={{ color: T.textDim, marginLeft: 4 }}>(optional — Nielsen POS, MSA shipments, Offtake, etc.)</span></div>
           {signalFiles.map((sf, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: T.bgSurface, borderRadius: T.r, border: `1px solid ${T.border}`, marginBottom: 6 }}>
+            <div key={sf.name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: T.bgSurface, borderRadius: T.r, border: `1px solid ${T.border}`, marginBottom: 6 }}>
               <FileSpreadsheet size={12} style={{ color: T.accent }} />
               <span style={{ fontSize: 12, color: T.text, flex: 1 }}>{sf.name}</span>
               <span style={{ fontSize: 11, color: T.textMuted }}>{sf.rows.length.toLocaleString()} rows</span>
@@ -428,6 +430,7 @@ function UploadScreen({ onData }) {
                 onChange={e => { if (e.target.files[0]) { handleSignalFile(e.target.files[0]); e.target.value = ""; } }} />
             </div>
           )}
+          {signalError && <div style={{ marginTop: 8, color: T.red, fontSize: 11, fontFamily: T.font, display: "flex", alignItems: "center", gap: 6 }}><XCircle size={11} />{signalError}</div>}
         </div>
 
         <div style={{ padding: "12px 16px", background: T.bgSurface, borderRadius: T.r, border: `1px solid ${T.border}` }}>
@@ -470,7 +473,7 @@ function SignalConfig({ sig, index, demandGrainCols, onChange }) {
   const [grainMapping, setGrainMapping] = useState(() => autoMapGrain());
   const [label, setLabel] = useState(sig.name.replace(/\.[^.]+$/, ""));
 
-  useMemo(() => {
+  useEffect(() => {
     onChange(index, { ...sig, dateCol, valueCol, grainMapping, label });
   }, [dateCol, valueCol, grainMapping, label]);
 
@@ -533,7 +536,7 @@ function ConfigScreen({ rows, fileName, signalFiles, onRun, onBack }) {
   const [configuredSignals, setConfiguredSignals] = useState(() => signalFiles.map(sf => ({ ...sf, dateCol: "", valueCol: "", grainMapping: {}, label: sf.name.replace(/\.[^.]+$/, "") })));
 
   const filterVals = useMemo(() => filterCol ? [...new Set(rows.map(r => String(r[filterCol])))].sort() : [], [filterCol, rows]);
-  useMemo(() => { if (filterVals.length && !filterVal) setFilterVal(filterVals[0]); }, [filterVals]);
+  useEffect(() => { if (filterVals.length && !filterVal) setFilterVal(filterVals[0]); }, [filterVals]);
 
   const colOptions = cols.map(c => ({ value: c, label: c }));
   const effectiveRows = useMemo(() => filterCol && filterVal ? rows.filter(r => String(r[filterCol]) === filterVal).length : rows.length, [rows, filterCol, filterVal]);
@@ -598,7 +601,7 @@ function ConfigScreen({ rows, fileName, signalFiles, onRun, onBack }) {
 
           {/* Signal configurations */}
           {configuredSignals.map((sig, i) => (
-            <SignalConfig key={i} sig={sig} index={i} demandGrainCols={grainCols} onChange={updateSignal} />
+            <SignalConfig key={sig.name} sig={sig} index={i} demandGrainCols={grainCols} onChange={updateSignal} />
           ))}
 
           <button onClick={handleRun} disabled={!dateCol || !targetCol} style={{ background: T.accent, color: "#fff", border: "none", borderRadius: T.r, padding: "12px 24px", cursor: "pointer", fontFamily: T.fontSans, fontSize: 14, fontWeight: 700, display: "flex", alignItems: "center", gap: 8, justifyContent: "center", opacity: (!dateCol || !targetCol) ? 0.5 : 1 }}>
@@ -624,6 +627,7 @@ function Dashboard({ config, onReset }) {
 
   const [signalResults, setSignalResults] = useState(null);
   const [signalRunning, setSignalRunning] = useState(false);
+  const [signalError, setSignalError] = useState(null);
 
   const results = signalResults || baseResults;
   const sortField = signalResults ? "adjustedScore" : "score";
@@ -653,9 +657,10 @@ function Dashboard({ config, onReset }) {
   const runSignalAnalysis = useCallback(() => {
     if (!hasSignals || signalRunning) return;
     setSignalRunning(true);
+    setSignalError(null);
     setTimeout(() => {
       try { setSignalResults(computeAllSignalLifts(baseResults, signals)); }
-      catch (e) { console.error(e); }
+      catch (e) { console.error(e); setSignalError(`Signal analysis failed: ${e.message}`); }
       setSignalRunning(false);
     }, 50);
   }, [baseResults, signals, hasSignals, signalRunning]);
@@ -706,6 +711,12 @@ function Dashboard({ config, onReset }) {
             <button onClick={runSignalAnalysis} disabled={signalRunning} style={{ background: T.cyan, color: "#000", border: "none", borderRadius: T.r, padding: "8px 16px", cursor: signalRunning ? "not-allowed" : "pointer", fontFamily: T.fontSans, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 6, opacity: signalRunning ? 0.7 : 1 }}>
               {signalRunning ? <><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Running…</> : <><Zap size={12} /> Run Signal Analysis</>}
             </button>
+          </div>
+        )}
+        {signalError && (
+          <div style={{ background: T.red + "10", border: `1px solid ${T.red}40`, borderRadius: T.rLg, padding: "12px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+            <AlertCircle size={15} style={{ color: T.red, flexShrink: 0 }} />
+            <span style={{ fontSize: 12, color: T.red }}>{signalError}</span>
           </div>
         )}
 
@@ -796,7 +807,7 @@ function Dashboard({ config, onReset }) {
                   <XAxis type="number" domain={[0, 100]} tick={{ fontFamily: T.font, fontSize: 9, fill: T.textMuted }} />
                   <YAxis type="category" dataKey="name" width={120} tick={{ fontFamily: T.font, fontSize: 9, fill: T.textMuted }} />
                   <Tooltip contentStyle={{ background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: T.r, fontFamily: T.font, fontSize: 11 }} formatter={v => [`${v} / 100`, "Score"]} />
-                  <Bar dataKey="score" radius={3}>{barData.map((e, i) => <Cell key={i} fill={e.color} />)}</Bar>
+                  <Bar dataKey="score" radius={3}>{barData.map((e) => <Cell key={e.name} fill={e.color} />)}</Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -882,7 +893,7 @@ function Dashboard({ config, onReset }) {
                         <Tooltip contentStyle={{ background: T.bgCard, border: `1px solid ${T.border}`, fontFamily: T.font, fontSize: 11 }} formatter={v => [`${v > 0 ? "+" : ""}${v}%`, "RMSE lift"]} />
                         <ReferenceLine y={0} stroke={T.border} />
                         <Bar dataKey="lift" radius={3}>
-                          {selected.signalLifts.filter(s => s.avgLift !== null).map((s, i) => <Cell key={i} fill={s.avgLift > 5 ? T.green : s.avgLift > 0 ? T.orange : T.red} />)}
+                          {selected.signalLifts.filter(s => s.avgLift !== null).map((s) => <Cell key={s.label} fill={s.avgLift > 5 ? T.green : s.avgLift > 0 ? T.orange : T.red} />)}
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
